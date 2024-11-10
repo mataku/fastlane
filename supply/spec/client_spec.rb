@@ -6,6 +6,7 @@ describe Supply do
         to_return(status: 200, body: '{}', headers: { 'Content-Type' => 'application/json' })
       stub_request(:post, "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/test-app/edits").
         to_return(status: 200, body: '{}', headers: { 'Content-Type' => 'application/json' })
+      allow(Google::Auth).to receive(:get_application_default).and_return(nil)
     end
 
     describe "displays error messages from the API" do

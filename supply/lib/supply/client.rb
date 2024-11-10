@@ -47,16 +47,21 @@ module Supply
     # Initializes the service and its auth_client using the specified information
     # @param service_account_json: The raw service account Json data
     def initialize(service_account_json: nil, params: nil)
-      json_data = JSON.parse(service_account_json)
-      credentials = if json_data['type'] == 'external_account'
-                      Google::Auth::ExternalAccount::Credentials
-                    else
-                      Google::Auth::ServiceAccountCredentials
-                    end
-      auth_client = credentials.make_creds(json_key_io: service_account_json, scope: self.class::SCOPE)
-      UI.verbose("Fetching a new access token from Google...")
+      auth_client = if google_auth_application_default.nil?
+                      json_data = JSON.parse(service_account_json.string)
+                      credentials = if json_data['type'] == 'external_account'
+                                      Google::Auth::ExternalAccount::Credentials
+                                    else
+                                      Google::Auth::ServiceAccountCredentials
+                                    end
 
-      auth_client.fetch_access_token!
+                      creds = credentials.make_creds(json_key_io: service_account_json, scope: self.class::SCOPE)
+                      UI.verbose("Fetching a new access token from Google...")
+                      creds.fetch_access_token!
+                      creds
+                    else
+                      google_auth_application_default
+                    end
 
       if FastlaneCore::Env.truthy?("DEBUG")
         Google::Apis.logger.level = Logger::DEBUG
@@ -107,6 +112,13 @@ module Supply
         UI.user_error!("Google Api Error: #{e.message} - #{message}")
       end
     end
+
+    def google_auth_application_default
+      @google_auth_application_default ||= Google::Auth.get_application_default([self.class::SCOPE])
+    rescue
+      # Google client throws RuntimeError if credential is not found
+      nil
+    end
   end
 
   class Client < AbstractGoogleServiceClient
@@ -136,6 +148,8 @@ module Supply
         }
         service_account_json = StringIO.new(JSON.dump(cred_json))
         service_account_json
+      elsif google_auth_application_default != nil
+        UI.verbose("Using Application Default Credentials for Google authentication")
       else
         UI.user_error!("No authentication parameters were specified. These must be provided in order to authenticate with Google")
       end
