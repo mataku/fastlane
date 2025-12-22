@@ -3,6 +3,7 @@ require 'fastlane_core/command_executor'
 require 'fastlane/helper/adb_helper'
 require_relative 'reports_generator'
 require_relative 'module'
+require_relative 'gradle_device_runner'
 
 module Screengrab
   class Runner
@@ -18,7 +19,6 @@ module Screengrab
     end
 
     def run
-      # Standardize the locales
       FastlaneCore::PrintTable.print_values(config: @config, hide_keys: [], title: "Summary for screengrab #{Fastlane::VERSION}")
 
       app_apk_path = @config.fetch(:app_apk_path, ask: false)
@@ -27,24 +27,29 @@ module Screengrab
 
       apk_paths_provided = app_apk_path && !app_apk_path.empty? && tests_apk_path && !tests_apk_path.empty?
 
+      # Check if using Gradle Managed Devices
+      if @config[:use_gradle_managed_device]
+        number_of_screenshots = run_with_gradle_managed_device(apk_paths_provided, discovered_apk_paths)
+      else
+        number_of_screenshots = run_with_adb(apk_paths_provided, discovered_apk_paths)
+      end
+
+      ReportsGenerator.new.generate
+
+      UI.success("Captured #{number_of_screenshots} new screenshots! 📷✨") if number_of_screenshots
+    end
+
+    def run_with_adb(apk_paths_provided, discovered_apk_paths)
       unless apk_paths_provided || discovered_apk_paths.any?
         UI.error('No APK paths were provided and no APKs could be found')
         UI.error("Please provide APK paths with 'app_apk_path' and 'tests_apk_path' and make sure you have assembled APKs prior to running this command.")
         return
       end
 
+      validate_test_filtering
+
       test_classes_to_use = @config[:use_tests_in_classes]
       test_packages_to_use = @config[:use_tests_in_packages]
-
-      if test_classes_to_use && test_classes_to_use.any? && test_packages_to_use && test_packages_to_use.any?
-        UI.error("'use_tests_in_classes' and 'use_tests_in_packages' cannot be combined. Please use one or the other.")
-        return
-      end
-
-      if (test_classes_to_use.nil? || test_classes_to_use.empty?) && (test_packages_to_use.nil? || test_packages_to_use.empty?)
-        UI.important('Limiting the test classes run by `screengrab` to just those that generate screenshots can make runs faster.')
-        UI.important('Consider using the :use_tests_in_classes or :use_tests_in_packages option, and organize your tests accordingly.')
-      end
 
       device_type_dir_name = "#{@config[:device_type]}Screenshots"
       clear_local_previous_screenshots(device_type_dir_name)
@@ -64,14 +69,90 @@ module Screengrab
 
       clear_device_previous_screenshots(@config[:app_package_name], device_serial, device_screenshots_paths)
 
-      app_apk_path ||= select_app_apk(discovered_apk_paths)
-      tests_apk_path ||= select_tests_apk(discovered_apk_paths)
+      app_apk_path = @config[:app_apk_path] || select_app_apk(discovered_apk_paths)
+      tests_apk_path = @config[:tests_apk_path] || select_tests_apk(discovered_apk_paths)
 
-      number_of_screenshots = run_tests(device_type_dir_name, device_serial, app_apk_path, tests_apk_path, test_classes_to_use, test_packages_to_use, @config[:launch_arguments])
+      run_tests(device_type_dir_name, device_serial, app_apk_path, tests_apk_path, test_classes_to_use, test_packages_to_use, @config[:launch_arguments])
+    end
 
-      ReportsGenerator.new.generate
+    def run_with_gradle_managed_device(apk_paths_provided, discovered_apk_paths)
+      # GMD doesn't require APK installation - Gradle handles it
+      # But we still need to know the package names for screenshot pulling
+      unless apk_paths_provided || discovered_apk_paths.any?
+        UI.error('No APK paths were provided and no APKs could be found')
+        UI.error("Please provide APK paths with 'app_apk_path' and 'tests_apk_path' and make sure you have assembled APKs prior to running this command.")
+        return
+      end
 
-      UI.success("Captured #{number_of_screenshots} new screenshots! 📷✨")
+      validate_test_filtering
+
+      device_type_dir_name = "#{@config[:device_type]}Screenshots"
+      clear_local_previous_screenshots(device_type_dir_name)
+
+      # Initialize GMD runner
+      gmd_runner = GradleDeviceRunner.new(@config, @android_env)
+      gmd_runner.validate_configuration
+
+      # Run tests via Gradle
+      run_tests_gmd(device_type_dir_name, gmd_runner)
+    end
+
+    def validate_test_filtering
+      test_classes_to_use = @config[:use_tests_in_classes]
+      test_packages_to_use = @config[:use_tests_in_packages]
+
+      if test_classes_to_use && test_classes_to_use.any? && test_packages_to_use && test_packages_to_use.any?
+        UI.error("'use_tests_in_classes' and 'use_tests_in_packages' cannot be combined. Please use one or the other.")
+        return false
+      end
+
+      if (test_classes_to_use.nil? || test_classes_to_use.empty?) && (test_packages_to_use.nil? || test_packages_to_use.empty?)
+        UI.important('Limiting the test classes run by `screengrab` to just those that generate screenshots can make runs faster.')
+        UI.important('Consider using the :use_tests_in_classes or :use_tests_in_packages option, and organize your tests accordingly.')
+      end
+
+      true
+    end
+
+    def run_tests_gmd(device_type_dir_name, gmd_runner)
+      test_classes_to_use = @config[:use_tests_in_classes]
+      test_packages_to_use = @config[:use_tests_in_packages]
+
+      number_of_screenshots = 0
+
+      @config[:locales].each do |locale|
+        UI.message("Running tests for locale: #{locale} via Gradle Managed Device")
+
+        # Execute tests via Gradle
+        result = gmd_runner.execute_tests_for_locale(
+          locale,
+          test_classes_to_use,
+          test_packages_to_use,
+          @config[:launch_arguments]
+        )
+
+        # Handle test failures
+        unless result[:success]
+          if @config[:exit_on_test_failure]
+            UI.test_failure!("Tests failed for locale #{locale} on Gradle Managed Device")
+          else
+            UI.error("Tests failed for locale #{locale}")
+          end
+        end
+
+        # After Gradle executes tests, get the device serial
+        device_serial = gmd_runner.get_device_serial
+
+        unless device_serial
+          UI.error("Could not determine device serial for Gradle Managed Device")
+          next
+        end
+
+        # Reuse existing screenshot pulling logic
+        number_of_screenshots += pull_screenshots_from_device(locale, device_serial, device_type_dir_name)
+      end
+
+      number_of_screenshots
     end
 
     def select_device

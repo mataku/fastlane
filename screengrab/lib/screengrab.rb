@@ -1,4 +1,5 @@
 require_relative 'screengrab/runner'
+require_relative 'screengrab/gradle_device_runner'
 require_relative 'screengrab/reports_generator'
 require_relative 'screengrab/detect_values'
 require_relative 'screengrab/dependency_checker'

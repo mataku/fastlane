@@ -144,7 +144,34 @@ module Screengrab
         FastlaneCore::ConfigItem.new(key: :adb_host,
                                      env_name: 'SCREENGRAB_ADB_HOST',
                                      description: "Configure the host used by adb to connect, allows running on remote devices farm",
-                                     optional: true)
+                                     optional: true),
+        FastlaneCore::ConfigItem.new(key: :use_gradle_managed_device,
+                                     env_name: 'SCREENGRAB_USE_GRADLE_MANAGED_DEVICE',
+                                     description: "Use Gradle Managed Devices instead of ADB for running tests. When enabled, screengrab will execute tests via Gradle tasks rather than direct ADB commands",
+                                     default_value: false,
+                                     type: Boolean),
+        FastlaneCore::ConfigItem.new(key: :managed_device_name,
+                                     env_name: 'SCREENGRAB_MANAGED_DEVICE_NAME',
+                                     optional: true,
+                                     description: "The name of the Gradle Managed Device to use (as defined in your build.gradle). Required when use_gradle_managed_device is true"),
+        FastlaneCore::ConfigItem.new(key: :gradle_path,
+                                     env_name: 'SCREENGRAB_GRADLE_PATH',
+                                     optional: true,
+                                     description: "Path to your gradlew executable. Can be absolute or relative to project_dir",
+                                     default_value: './gradlew'),
+        FastlaneCore::ConfigItem.new(key: :project_dir,
+                                     env_name: 'SCREENGRAB_PROJECT_DIR',
+                                     optional: true,
+                                     description: "The root directory of the Gradle project. Used with Gradle Managed Devices",
+                                     default_value: '.',
+                                     verify_block: proc do |value|
+                                       UI.user_error!("Project directory '#{value}' does not exist") unless File.directory?(value)
+                                     end),
+        FastlaneCore::ConfigItem.new(key: :gradle_module,
+                                     env_name: 'SCREENGRAB_GRADLE_MODULE',
+                                     optional: true,
+                                     description: "The Gradle module containing the screenshot tests (e.g., 'app'). Required when use_gradle_managed_device is true",
+                                     default_value: 'app')
       ]
     end
   end
